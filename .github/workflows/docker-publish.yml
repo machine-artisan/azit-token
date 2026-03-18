@@ -1,0 +1,86 @@
+name: DevSecOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ==========================================
+  # Job 1: CI (빌드 및 테스트 검증)
+  # PR 생성 시, 그리고 main 병합 시 모두 실행됨
+  # ==========================================
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node.js 세팅 (Dockerfile과 동일한 22 버전으로 동기화)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: 테스트 실행
+        run: npm test
+
+      - name: 🚨 CI 파이프라인 실패 슬랙 알림
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"🚨 *[CI 실패]* 코드에 문제가 있습니다! Anti-Gravity 또는 Cursor IDE에서 에러 로그를 확인하고 수정하세요. \n👉 확인 링크: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: ✅ CI 파이프라인 통과 슬랙 알림 (PR일 경우에만)
+        if: success() && github.event_name == 'pull_request'
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"✅ *[CI 통과]* 테스트가 성공했습니다! PR 코드 리뷰를 진행해 주세요. \n👉 PR 링크: ${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"}' ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ==========================================
+  # Job 2: CD (Docker 이미지 빌드 및 푸시)
+  # 오직 CI가 성공하고, main 브랜치에 Push(Merge) 되었을 때만 실행됨
+  # ==========================================
+  docker-publish:
+    needs: build-and-test  # build-and-test Job이 성공해야만 실행
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' # main 브랜치 푸시일 때만 작동
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/token-azit:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/token-azit:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 🐳 배포 준비 완료 슬랙 알림
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"🐳 *[CD 완료]* 새로운 Docker 이미지가 DockerHub에 푸시되었습니다! \n🔜 곧 Render 서버에 웹훅이 전달되어 자동 배포됩니다."}' ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: ❌ Docker 푸시 실패 슬랙 알림
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"❌ *[CD 실패]* Docker 이미지 빌드 또는 푸시에 실패했습니다. GitHub Actions 로그를 확인하세요."}' ${{ secrets.SLACK_WEBHOOK_URL }}
