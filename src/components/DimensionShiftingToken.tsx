@@ -1,7 +1,8 @@
 "use client";
 
 import { motion, useAnimation } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Confetti from "react-confetti";
 
 import { TOKEN_ASPECTS, type TokenAspect } from "@/constants/tokenAspects";
 
@@ -39,6 +40,10 @@ export function DimensionShiftingToken() {
   const [result, setResult] = useState<TokenAspect | null>(null);
   const [isShifting, setIsShifting] = useState(false);
 
+  const [isConfettiActive, setIsConfettiActive] = useState(false);
+  const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
+  const confettiTimerRef = useRef<number | null>(null);
+
   const aspectHex = useMemo(() => {
     if (!result) return null;
     return TAILWIND_BG_TO_HEX[result.tailwindColorClass] ?? null;
@@ -58,6 +63,24 @@ export function DimensionShiftingToken() {
   useEffect(() => {
     if (!isSpinning && !isShifting) startIdleRotation();
   }, [isSpinning, isShifting, startIdleRotation]);
+
+  useEffect(() => {
+    const updateSize = () => {
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+
+    updateSize();
+    window.addEventListener("resize", updateSize);
+    return () => window.removeEventListener("resize", updateSize);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (confettiTimerRef.current) {
+        window.clearTimeout(confettiTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleClick = useCallback(async () => {
     if (isSpinning || isShifting) return;
@@ -84,6 +107,16 @@ export function DimensionShiftingToken() {
     const aspect = pickRandomAspect();
     setResult(aspect);
 
+    // Show confetti right when the result is revealed.
+    if (confettiTimerRef.current) {
+      window.clearTimeout(confettiTimerRef.current);
+    }
+    setIsConfettiActive(true);
+    confettiTimerRef.current = window.setTimeout(() => {
+      setIsConfettiActive(false);
+      confettiTimerRef.current = null;
+    }, 3000);
+
     // Phase 2: expand into sphere then collapse back into a colored disk.
     setIsShifting(true);
     await controls.start({
@@ -103,6 +136,13 @@ export function DimensionShiftingToken() {
   const buttonTheme = result ? (TAILWIND_BG_TO_BUTTON[result.tailwindColorClass] ?? null) : null;
 
   const handleSpinAgain = useCallback(() => {
+    // Hide confetti immediately.
+    setIsConfettiActive(false);
+    if (confettiTimerRef.current) {
+      window.clearTimeout(confettiTimerRef.current);
+      confettiTimerRef.current = null;
+    }
+
     // 1. Reset the result to null
     setResult(null);
     // 2. Ensure spinning state is false so it goes back to the idle animation
@@ -136,6 +176,17 @@ export function DimensionShiftingToken() {
 
   return (
     <div className="flex w-full flex-col items-center justify-center gap-6 py-16">
+      {isConfettiActive ? (
+        <Confetti
+          width={windowSize.width}
+          height={windowSize.height}
+          recycle={false}
+          numberOfPieces={200}
+          run={isConfettiActive}
+          style={{ position: "fixed", top: 0, left: 0, zIndex: 50 }}
+        />
+      ) : null}
+
       <div
         role="button"
         tabIndex={isSpinning || isShifting || Boolean(result) ? -1 : 0}
